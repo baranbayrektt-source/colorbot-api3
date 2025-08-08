@@ -17,7 +17,16 @@ TEST_LICENSES = {
         "used_by": None,
         "hardware_id": None,
         "last_check": None
-    }
+    },
+    # Admin panelden oluşturulan key'ler buraya eklenecek
+    # Örnek: "QUARX-XXXX-XXXX-XXXX-XXXX": {
+    #     "type": "premium",
+    #     "expiry_date": (datetime.now() + timedelta(days=30)).isoformat(),
+    #     "is_used": 0,
+    #     "used_by": None,
+    #     "hardware_id": None,
+    #     "last_check": None
+    # }
 }
 
 def init_database():
@@ -189,6 +198,43 @@ def get_license_status():
             return jsonify({'license_data': response_data}), 200
         else:
             return jsonify({'error': 'Lisans anahtarı bulunamadı'}), 404
+        
+    except Exception as e:
+        return jsonify({'error': f'Internal server error: {e}'}), 500
+
+@app.route('/api/license/add', methods=['POST'])
+def add_license():
+    """Admin panelden lisans anahtarı ekle"""
+    try:
+        data = request.get_json()
+        license_key = data.get('license_key')
+        license_type = data.get('license_type')
+        expiry_date = data.get('expiry_date')
+        
+        if not license_key or not license_type or not expiry_date:
+            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+        
+        # Key zaten var mı kontrol et
+        if license_key in TEST_LICENSES:
+            return jsonify({'success': False, 'message': 'License key already exists'}), 409
+        
+        # Yeni key'i ekle
+        TEST_LICENSES[license_key] = {
+            "type": license_type,
+            "expiry_date": expiry_date,
+            "is_used": 0,
+            "used_by": None,
+            "hardware_id": None,
+            "last_check": None
+        }
+        
+        return jsonify({
+            'success': True,
+            'message': 'License key added successfully',
+            'key': license_key,
+            'type': license_type,
+            'expiry_date': expiry_date
+        }), 200
         
     except Exception as e:
         return jsonify({'error': f'Internal server error: {e}'}), 500
