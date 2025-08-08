@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from datetime import datetime
+from datetime import datetime, timedelta
 import sqlite3
 import os
 
@@ -211,6 +211,37 @@ def get_license_status():
         conn.close()
         
         return jsonify({'license_data': license_data}), 200
+        
+    except Exception as e:
+        return jsonify({'error': f'Internal server error: {e}'}), 500
+
+@app.route('/api/test/add-key', methods=['POST'])
+def add_test_key():
+    """Test lisans anahtarı ekle"""
+    try:
+        # Test lisans anahtarı oluştur
+        test_key = "TEST-API-KEY-1234-5678-9ABC"
+        expiry_date = (datetime.now() + timedelta(days=30)).isoformat()
+        
+        # Veritabanına ekle
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT OR REPLACE INTO licenses 
+            (license_key, license_type, created_date, expiry_date, is_used, used_by, generated_by, price)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (test_key, 'test', datetime.now().isoformat(), expiry_date, 0, None, 'test', 0.0))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Test lisans anahtarı eklendi',
+            'key': test_key,
+            'expiry_date': expiry_date
+        }), 200
         
     except Exception as e:
         return jsonify({'error': f'Internal server error: {e}'}), 500
