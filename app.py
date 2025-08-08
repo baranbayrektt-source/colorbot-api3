@@ -5,8 +5,20 @@ import os
 
 app = Flask(__name__)
 
-# Render'da veritabanı yolu
-DB_PATH = os.environ.get('DATABASE_URL', 'license_database.db')
+# In-memory veritabanı kullan (Render.com'da dosya sistemi sorunları olabilir)
+DB_PATH = ":memory:"
+
+# Test lisans anahtarları (in-memory)
+TEST_LICENSES = {
+    "TEST-API-KEY-1234-5678-9ABC": {
+        "type": "test",
+        "expiry_date": (datetime.now() + timedelta(days=30)).isoformat(),
+        "is_used": 0,
+        "used_by": None,
+        "hardware_id": None,
+        "last_check": None
+    }
+}
 
 def init_database():
     """Veritabanını başlat"""
@@ -31,6 +43,15 @@ def init_database():
             )
         ''')
         
+        # Test lisans anahtarlarını ekle
+        for key, data in TEST_LICENSES.items():
+            cursor.execute('''
+                INSERT OR REPLACE INTO licenses 
+                (license_key, license_type, created_date, expiry_date, is_used, used_by, generated_by, price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (key, data['type'], datetime.now().isoformat(), data['expiry_date'], 
+                  data['is_used'], data['used_by'], 'test', 0.0))
+        
         conn.commit()
         conn.close()
         print("✅ Veritabanı başlatıldı")
@@ -49,7 +70,8 @@ def home():
             '/api/health',
             '/api/license/validate',
             '/api/license/activate',
-            '/api/license/status'
+            '/api/license/status',
+            '/api/test/add-key'
         ]
     })
 
@@ -73,48 +95,32 @@ def validate_license():
         if not license_key:
             return jsonify({'valid': False, 'message': 'License key required'}), 400
         
-        # Veritabanında kontrol et
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT license_key, license_type, expiry_date, is_used, used_by
-            FROM licenses 
-            WHERE license_key = ?
-        ''', (license_key,))
-        
-        result = cursor.fetchone()
-        
-        if not result:
+        # Test lisans anahtarlarında kontrol et
+        if license_key in TEST_LICENSES:
+            license_data = TEST_LICENSES[license_key]
+            
+            # Süre kontrolü
+            expiry = datetime.fromisoformat(license_data['expiry_date'])
+            now = datetime.now()
+            
+            if expiry < now:
+                return jsonify({'valid': False, 'message': 'Lisans süresi dolmuş'}), 403
+            
+            # Son kontrol zamanını güncelle
+            license_data['last_check'] = now.isoformat()
+            
+            response_data = {
+                'key': license_key,
+                'type': license_data['type'],
+                'expiry_date': license_data['expiry_date'],
+                'is_used': license_data['is_used'],
+                'used_by': license_data['used_by'],
+                'days_remaining': (expiry - now).days
+            }
+            
+            return jsonify({'valid': True, 'license_data': response_data}), 200
+        else:
             return jsonify({'valid': False, 'message': 'Lisans anahtarı bulunamadı'}), 404
-        
-        key, license_type, expiry_date, is_used, used_by = result
-        
-        # Süre kontrolü
-        expiry = datetime.fromisoformat(expiry_date)
-        now = datetime.now()
-        
-        if expiry < now:
-            return jsonify({'valid': False, 'message': 'Lisans süresi dolmuş'}), 403
-        
-        # Son kontrol zamanını güncelle
-        cursor.execute('''
-            UPDATE licenses SET last_check = ? WHERE license_key = ?
-        ''', (now.isoformat(), license_key))
-        
-        conn.commit()
-        conn.close()
-        
-        license_data = {
-            'key': key,
-            'type': license_type,
-            'expiry_date': expiry_date,
-            'is_used': is_used,
-            'used_by': used_by,
-            'days_remaining': (expiry - now).days
-        }
-        
-        return jsonify({'valid': True, 'license_data': license_data}), 200
         
     except Exception as e:
         return jsonify({'error': f'Internal server error: {e}'}), 500
@@ -132,41 +138,26 @@ def activate_license():
         if not license_key:
             return jsonify({'success': False, 'message': 'License key required'}), 400
         
-        # Veritabanında kontrol et
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT license_key, license_type, expiry_date, is_used, used_by
-            FROM licenses 
-            WHERE license_key = ?
-        ''', (license_key,))
-        
-        result = cursor.fetchone()
-        
-        if not result:
+        # Test lisans anahtarlarında kontrol et
+        if license_key in TEST_LICENSES:
+            license_data = TEST_LICENSES[license_key]
+            
+            # Süre kontrolü
+            expiry = datetime.fromisoformat(license_data['expiry_date'])
+            now = datetime.now()
+            
+            if expiry < now:
+                return jsonify({'success': False, 'message': 'Lisans süresi dolmuş'}), 403
+            
+            # Aktivasyon
+            license_data['is_used'] = 1
+            license_data['used_by'] = username or 'unknown'
+            license_data['hardware_id'] = hardware_id
+            license_data['last_check'] = now.isoformat()
+            
+            return jsonify({'success': True, 'message': 'Lisans aktifleştirildi'}), 200
+        else:
             return jsonify({'success': False, 'message': 'Lisans anahtarı bulunamadı'}), 404
-        
-        key, license_type, expiry_date, is_used, used_by = result
-        
-        # Süre kontrolü
-        expiry = datetime.fromisoformat(expiry_date)
-        now = datetime.now()
-        
-        if expiry < now:
-            return jsonify({'success': False, 'message': 'Lisans süresi dolmuş'}), 403
-        
-        # Aktivasyon
-        cursor.execute('''
-            UPDATE licenses 
-            SET is_used = 1, used_by = ?, hardware_id = ?, last_check = ?
-            WHERE license_key = ?
-        ''', (username or 'unknown', hardware_id, now.isoformat(), license_key))
-        
-        conn.commit()
-        conn.close()
-        
-        return jsonify({'success': True, 'message': 'Lisans aktifleştirildi'}), 200
         
     except Exception as e:
         return jsonify({'error': f'Internal server error: {e}'}), 500
@@ -180,37 +171,24 @@ def get_license_status():
         if not license_key:
             return jsonify({'error': 'License key required'}), 400
         
-        # Veritabanında kontrol et
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT license_key, license_type, expiry_date, is_used, used_by, hardware_id, last_check
-            FROM licenses 
-            WHERE license_key = ?
-        ''', (license_key,))
-        
-        result = cursor.fetchone()
-        
-        if not result:
+        # Test lisans anahtarlarında kontrol et
+        if license_key in TEST_LICENSES:
+            license_data = TEST_LICENSES[license_key]
+            
+            response_data = {
+                'key': license_key,
+                'type': license_data['type'],
+                'expiry_date': license_data['expiry_date'],
+                'is_used': license_data['is_used'],
+                'used_by': license_data['used_by'],
+                'hardware_id': license_data['hardware_id'],
+                'last_check': license_data['last_check'],
+                'days_remaining': (datetime.fromisoformat(license_data['expiry_date']) - datetime.now()).days
+            }
+            
+            return jsonify({'license_data': response_data}), 200
+        else:
             return jsonify({'error': 'Lisans anahtarı bulunamadı'}), 404
-        
-        key, license_type, expiry_date, is_used, used_by, hardware_id, last_check = result
-        
-        license_data = {
-            'key': key,
-            'type': license_type,
-            'expiry_date': expiry_date,
-            'is_used': is_used,
-            'used_by': used_by,
-            'hardware_id': hardware_id,
-            'last_check': last_check,
-            'days_remaining': (datetime.fromisoformat(expiry_date) - datetime.now()).days
-        }
-        
-        conn.close()
-        
-        return jsonify({'license_data': license_data}), 200
         
     except Exception as e:
         return jsonify({'error': f'Internal server error: {e}'}), 500
@@ -219,28 +197,14 @@ def get_license_status():
 def add_test_key():
     """Test lisans anahtarı ekle"""
     try:
-        # Test lisans anahtarı oluştur
+        # Test lisans anahtarı zaten mevcut
         test_key = "TEST-API-KEY-1234-5678-9ABC"
-        expiry_date = (datetime.now() + timedelta(days=30)).isoformat()
-        
-        # Veritabanına ekle
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT OR REPLACE INTO licenses 
-            (license_key, license_type, created_date, expiry_date, is_used, used_by, generated_by, price)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (test_key, 'test', datetime.now().isoformat(), expiry_date, 0, None, 'test', 0.0))
-        
-        conn.commit()
-        conn.close()
         
         return jsonify({
             'success': True,
-            'message': 'Test lisans anahtarı eklendi',
+            'message': 'Test lisans anahtarı mevcut',
             'key': test_key,
-            'expiry_date': expiry_date
+            'expiry_date': TEST_LICENSES[test_key]['expiry_date']
         }), 200
         
     except Exception as e:
